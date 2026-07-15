@@ -75,17 +75,27 @@ cd ../portfolio-website && git add assets/files/chessnet.onnx && git commit -m "
 # GitHub Pages serves it; AI Lab proxies it. No AI Lab redeploy needed for a model-only change.
 ```
 
-## 2. GPU training — the fastest path to "much stronger" (recommended)
+## 2. GPU training — the fastest path to "much stronger" (DECIDED: Kaggle)
 
-CPU here does ~1 epoch / 20 min in 35-min windows. A free GPU does the whole run in minutes.
-`train_supervised.py` already supports Colab/Kaggle (T4/P100/TPU, `--drive` for Google Drive
-persistence).
+**See `KAGGLE.md` for the full paste-and-go guide.** Matt chose the Kaggle path 2026-07-15.
 
-- **Kaggle** (easiest, 30 h/week free P100, no setup): upload `model.py`, `board.py`,
-  `train_supervised.py`; run `python train_supervised.py --samples 1000000 --epochs 15
-  --out /kaggle/working`. Download `chessnet.pth`, export locally, deploy.
-- **Colab**: `--drive` to checkpoint to Google Drive across session timeouts.
-- Bigger data (500k–1M positions) + more epochs on GPU → a genuinely strong policy net.
+CPU here does ~18 min/epoch on a 15W Core 7 150U and competes with Minecraft. A free Kaggle
+P100 does the whole run in minutes. Upload `model.py` + `board.py` + `train_supervised.py`,
+turn the GPU on, run one cell, download `chessnet.pth`. Cost $0, ~30 GPU h/week.
+
+**Train fresh on GPU — don't `--resume`.** One uninterrupted run lets CosineAnnealingLR anneal
+properly, which is precisely what the resume cycles broke (the LR-reset gotcha below).
+
+**Not GCloud — this was investigated and ruled out (2026-07-15):**
+- The **AI Lab is on Vercel, not GCloud** (`.vercel/project.json`, no Dockerfile/cloudbuild).
+  There is no AI Lab GCloud to migrate to.
+- The **chess demo has no backend**: `ChessDemo.js` loads `/api/assets/chessnet.onnx` (a static
+  proxy to GitHub Pages) and runs inference in the visitor's browser. Nothing to host.
+- The only GCP project is `pixel-ai` — *serving* infra (scale-to-zero Cloud Run + gateway) for
+  a different model. Cloud Run serves requests; it can't train.
+- Real GCP training = Vertex AI or a GPU VM = real money on paid billing.
+  **Matt's rule: no money is to be spent on GCloud.**
+- Colab is the other free option (`--drive` persists to Google Drive across timeouts).
 
 ## 3. MCTS self-play (the AlphaZero second stage — biggest strength upside)
 
