@@ -66,7 +66,13 @@ the 4096-move space (random = ln(4096) ≈ 8.31):
 | 3 | 3.23 | 0.65 | |
 | 4 | 2.71 | 0.44 | |
 | 5 | **2.57** | **0.40** | **currently deployed** — 1.e4→c5 (Sicilian), prioritizes O-O |
-| 6+ | in progress | | resume cycles continuing |
+| 6 | 2.6783 | 0.5145 | regressed — CosineAnnealingLR reset on resume (see gotchas) |
+| 7 | — | — | trained fine; losses lost to stdout buffering (use `python -u`) |
+| 8 | 2.3024 | 0.3365 | LR stepped down to 2e-4 |
+| 9 | **2.2232** | **0.3088** | best so far — on disk, **not yet deployed** |
+
+Losses are only comparable *within* a cycle: each resume streams a different 250K positions.
+A fixed validation set is still the missing piece for measuring this properly.
 
 ## Export + deploy
 

@@ -7,12 +7,35 @@ Roadmap for finishing / strengthening the Chess AI. See `CHESSNET.md` for how it
 - **Deployed model:** 5-epoch supervised net, policy loss **2.57**, value **0.40**. Live at
   https://ai-lab-bice.vercel.app/projects/chess-ai — plays book openings (1.e4→c5), prioritizes
   castling, and now runs behind an in-browser **alpha-beta search** so it won't hang pieces.
-- **Latest checkpoint on disk:** `chessnet_checkpoint.pth` = **next epoch 8** (epoch 7 trained
-  2026-07-15 at `--lr 3e-4`, min-ELO 1700). `chessnet.pth` = those epoch-7 weights.
+- **Latest checkpoint on disk:** `chessnet_checkpoint.pth` = **next epoch 10** (epochs 8 and 9
+  trained 2026-07-15 at `--lr 2e-4`, min-ELO 1700). `chessnet.pth` = those epoch-9 weights.
   `chessnet_1epoch_backup.pth` = safety backup.
-- **Epoch 7's loss numbers were lost to stdout buffering** (see the `python -u` gotcha below) —
-  the weights saved fine, only the printout vanished. Epoch 6 was policy ~2.68 / value ~0.51.
+- **The trained checkpoint is now clearly better than the deployed model** (policy 2.2232 vs
+  2.57) but has **not** been exported or deployed. See "Deploy the epoch-9 model?" below.
+- **The LR-reset gotcha is confirmed real, and the fix works.** Epoch 6 regressed to 2.6783 —
+  *worse* than epoch 5's 2.57 — because CosineAnnealingLR restarts each resume and jumped the
+  LR back up. Stepping `--lr` down each cycle (4e-4 → 3e-4 → 2e-4) reversed it: epoch 8 hit
+  2.3024, epoch 9 hit **2.2232**, the best so far and inside the 2.2–2.4 plateau target.
+- Epoch 7's numbers were lost to stdout buffering (see the `python -u` gotcha) — weights fine,
+  printout gone.
 - Training has been interrupted twice by machine restarts — nothing lost either time, just resume.
+
+### Progress (min-ELO 1700 cycles)
+
+| Epoch | policy | value | notes |
+|---|---|---|---|
+| 5 | 2.57 | 0.40 | **currently deployed** as `chessnet.onnx` |
+| 6 | 2.6783 | 0.5145 | regressed — LR reset at `--lr 4e-4` |
+| 7 | — | — | lost to stdout buffering (`--lr 3e-4`) |
+| 8 | 2.3024 | 0.3365 | `--lr 2e-4` |
+| 9 | **2.2232** | **0.3088** | best; on disk, not deployed |
+
+### Deploy the epoch-9 model?
+
+It is a real improvement on paper, but losses across cycles aren't strictly comparable (each
+cycle streams a *different* 250K positions). Before overwriting the deployed model, either
+A/B it by playing both, or build the fixed validation set (see Loose ends). The deployed
+epoch-5 model is known-good and plays real opening theory; don't replace it blind.
 
 > Note: losses aren't directly comparable between cycles (each streams a *different* 250K
 > positions). To know if a new checkpoint is truly better, either eval on a fixed held-out set
