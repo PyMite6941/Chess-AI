@@ -172,13 +172,29 @@ If that's more time than you have, drop `--depth` to 8 (~2x faster) or lower `--
     --positions 200000 \
     --depth 10 \
     --every-n 4 \
-    --threads 4 \
-    --skip-games 20000 \
+    --workers 4 \
+    --skip-games 0 \
     --out /kaggle/working/sf_dataset.npz
 ```
 
 (The pip/apt lines are cheap no-ops if already installed, and save you from a
 `ModuleNotFoundError` if the session restarted between cells.)
+
+**Measured 2026-07-15: ~48 pos/s → 200k in ~70 min.** (`--workers` is the throughput
+lever, not `--threads` — see the probe note above.)
+
+### `--skip-games 0` is deliberate — do NOT set it to 20000
+
+This looks backwards and isn't. The **validation set is built from games AFTER 20,000**
+(Cell 3). So `--skip-games 20000` here would start labelling at game 20,001 — **the exact
+games the validation set is drawn from** — leaking test data into training and quietly
+invalidating every `evaluate.py --compare` result afterwards.
+
+With `--skip-games 0`, 200k positions at ~19 per game (every 4th ply) ≈ **10,500 games**,
+which sits comfortably inside the first 20,000 and never touches validation.
+
+If you raise `--positions` a lot, check the arithmetic again:
+`positions / (19 per game)` must stay **well under 20,000 games**.
 
 `--skip-games 20000` keeps this clear of the validation set's games, so the held-out
 comparison stays honest.

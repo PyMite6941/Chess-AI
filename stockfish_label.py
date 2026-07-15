@@ -173,7 +173,11 @@ def main():
                     help="label every Nth ply — consecutive plies are near-duplicates")
     ap.add_argument("--min-elo", type=int, default=1700)
     ap.add_argument("--skip-games", type=int, default=0,
-                    help="skip N games first; use 20000 to stay clear of the validation set")
+                    help="skip N games first. KEEP AT 0 for training data: evaluate.py builds "
+                         "its validation set from games AFTER 20000, so skipping 20000 here "
+                         "would label the validation games and leak test data into training. "
+                         "200k positions at ~19/game is ~10.5k games — safely inside the "
+                         "first 20000.")
     ap.add_argument("--dataset", default="adamkarvonen/chess_games")
     ap.add_argument("--engine", default=None, help="path to stockfish binary")
     ap.add_argument("--out", default="sf_dataset.npz")
