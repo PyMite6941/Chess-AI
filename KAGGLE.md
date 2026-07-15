@@ -17,8 +17,13 @@ it auto-detects CUDA and takes `--out /kaggle/working`.
 ## The 5-minute version
 
 1. Go to **kaggle.com** → *Create* → **New Notebook**.
-2. Right sidebar → **Session options** → **Accelerator** → **GPU P100**. (Verify it's on; the
-   whole point is the GPU.)
+2. Right sidebar → **Session options** → **Accelerator** → **GPU T4 x2**.
+
+   > **Pick T4, NOT P100.** Kaggle's P100 is compute capability **sm_60**, and its preinstalled
+   > PyTorch only supports **sm_70+** — so the P100 errors out with *"Tesla P100 with CUDA
+   > capability sm_60 is not compatible with the current PyTorch installation"* and is useless
+   > here. The T4 is sm_75 and works. (Hit this for real on 2026-07-15.) The script uses one
+   > GPU, so "x2" costs nothing.
 3. Right sidebar → **Input** → **Upload** → *New Dataset*. Upload these three files from
    `Chess AI/`:
    - `model.py`
@@ -42,9 +47,18 @@ for f in ("model.py", "board.py", "train_supervised.py"):
     shutil.copy(f"/kaggle/input/chessnet-src/{f}", f"/kaggle/working/{f}")
 os.chdir("/kaggle/working")
 
-# Confirm the GPU is actually attached — if this says CPU, fix the Accelerator setting first.
+# HARD CHECK. `is_available()` alone is NOT enough — it returns True even on the
+# unsupported P100, which then fails at the first kernel launch. Actually run a matmul.
 import torch
-print("CUDA:", torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "")
+if not torch.cuda.is_available():
+    raise SystemExit("NO GPU — set Accelerator to GPU T4 x2")
+print("GPU:", torch.cuda.get_device_name(0), "capability:", torch.cuda.get_device_capability(0))
+# want (7,5) = T4.  (6,0) = P100 and is BROKEN with Kaggle's PyTorch.
+try:
+    (torch.randn(1000, 1000, device="cuda") @ torch.randn(1000, 1000, device="cuda")).sum().item()
+    print("GPU WORKS — matmul OK")
+except Exception as e:
+    raise SystemExit(f"GPU BROKEN ({e}) — switch Accelerator to GPU T4 x2")
 
 !python -u train_supervised.py \
     --samples 1000000 \
