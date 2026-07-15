@@ -30,9 +30,17 @@ auto-detects CUDA and takes `--out /kaggle/working`.
    > sm_60 is not compatible with the current PyTorch installation"*. The T4 is sm_75 and works.
    > (Hit for real on 2026-07-15.) The script uses one GPU, so "x2" costs nothing.
 4. Right sidebar → **Input** → **+ Add Input** → **Upload** → **New Dataset**. Upload
-   `model.py`, `board.py`, `train_supervised.py` from `Chess AI/`. Title it **`chessnet-src`**.
+   `model.py`, `board.py`, `train_supervised.py`, `stockfish_label.py` from `Chess AI/`.
+   Title it **`chessnet-src`**.
 
-Then run the cells below in order.
+Then pick a path:
+
+| Path | Cells | What you get |
+|---|---|---|
+| **A — human labels** | 1 → 2 → 3 → 4 | A better *1700-imitator*. Simple, ~40-70 min. |
+| **B — Stockfish labels** | 1 → B1 → B2 → B3 → 3 → 4 | A genuinely stronger net. Slower (labelling is CPU-bound), but breaks the 1700 ceiling. |
+
+Cell 1 and Cells 3–4 are shared. **Option B is the better model** — see why below.
 
 ---
 
@@ -103,6 +111,95 @@ run lets the cosine schedule anneal end-to-end, which is the entire point of it.
 
 Nothing is lost: the epoch-9 weights are already exported and deployed, and
 `chessnet_epoch5_backup.onnx` is the model before that.
+
+---
+
+# Option B — Stockfish labels (the ceiling-breaker)
+
+**Do this instead of Cell 2 when you want a genuinely stronger net, not just a better
+1700-imitator.**
+
+The problem with Cell 2: `parse_game()` labels every position with
+
+    policy = the move a ~1700-rated human actually played
+    value  = the game's final result, stamped onto EVERY position in that game
+
+So the net's ceiling is *imitating 1700-rated players*. More data and more epochs only make
+it a better 1700-imitator — they cannot push past it. The value label is also badly noisy:
+move 3 of a game lost on move 60 is labelled "losing" even if the position is dead equal,
+which is very likely why value loss stalls around 0.3.
+
+Stockfish replaces both targets:
+
+    policy = Stockfish's best move            (~3500 rated, not ~1700)
+    value  = Stockfish's eval of THIS position (not a result propagated backwards)
+
+Positions still come from real human games, so the distribution stays realistic — only the
+**labels** change. Label quality beats quantity: ~200k Stockfish-labelled positions should
+beat 1M human-labelled ones.
+
+**Cost:** Stockfish must analyse every position, so this is **CPU-bound and the GPU idles**
+during labelling. Roughly 30–50 ms/position at depth 10. **Measure before committing** —
+Cell B1 does a timed probe.
+
+Upload `stockfish_label.py` alongside the other files (add it to the `chessnet-src` dataset,
+or re-upload).
+
+## Cell B1 — install Stockfish + timed probe
+
+```python
+!apt-get -qq install -y stockfish
+
+import glob, shutil, os
+for name in ("stockfish_label.py",):
+    hits = glob.glob(f"/kaggle/input/**/{name}", recursive=True)
+    assert hits, f"{name} not found — add it to the chessnet-src dataset"
+    shutil.copy(hits[0], f"/kaggle/working/{name}")
+os.chdir("/kaggle/working")
+
+# Probe 2000 positions to get a REAL rate before committing to a long run.
+!python -u stockfish_label.py --positions 2000 --depth 10 --every-n 4 --out /tmp/probe.npz
+```
+
+Read the `pos/s` line and do the arithmetic: `200000 / rate / 60` = minutes for the real run.
+If that's more time than you have, drop `--depth` to 8 (~2x faster) or lower `--positions`.
+
+## Cell B2 — label for real
+
+```python
+!python -u stockfish_label.py \
+    --positions 200000 \
+    --depth 10 \
+    --every-n 4 \
+    --threads 4 \
+    --skip-games 20000 \
+    --out /kaggle/working/sf_dataset.npz
+```
+
+`--skip-games 20000` keeps this clear of the validation set's games, so the held-out
+comparison stays honest.
+
+`--every-n 4` labels every 4th ply — consecutive plies are near-duplicate positions, so
+labelling all of them spends Stockfish time for almost no extra information.
+
+## Cell B3 — train on the Stockfish labels
+
+```python
+!python -u train_supervised.py \
+    --records /kaggle/working/sf_dataset.npz \
+    --epochs 15 \
+    --batch 512 \
+    --lr 2e-4 \
+    --out /kaggle/working
+```
+
+`--records` skips streaming and game-parsing entirely — the positions and labels are already
+built, so this is pure GPU work and fast.
+
+Download `sf_dataset.npz` too if you want to retrain without re-labelling — it's the
+expensive artifact.
+
+---
 
 ## Cell 3 — build the fixed validation set
 

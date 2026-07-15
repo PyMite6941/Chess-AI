@@ -125,6 +125,26 @@ def parse_game(transcript, result, min_elo):
     return positions
 
 
+def load_records_npz(path):
+    """Load a pre-labelled dataset (e.g. from stockfish_label.py) instead of streaming.
+
+    Skips the HuggingFace stream and the game re-parsing entirely — the positions and
+    labels are already built. See stockfish_label.py for why Stockfish labels beat the
+    human-move/game-result labels build_records() produces.
+    """
+    import numpy as _np
+
+    if not os.path.exists(path):
+        sys.exit(f"--records {path} not found")
+    d = _np.load(path)
+    X, P, V = d["X"], d["P"], d["V"]
+    labeller = str(d["labeller"]) if "labeller" in d else "unknown"
+    extra = f", depth {int(d['depth'])}" if "depth" in d else ""
+    print(f"Loaded {len(X):,} pre-labelled positions from {path} "
+          f"(labeller: {labeller}{extra})")
+    return [(X[i], int(P[i]), float(V[i])) for i in range(len(X))]
+
+
 def build_records(hf_dataset, max_samples, min_elo=1500):
     records = []
     games_seen = games_skipped = 0
@@ -263,6 +283,9 @@ def main():
                         help="Print first dataset row and exit")
     parser.add_argument("--save-every", type=int, default=500,
                         help="Save checkpoint every N batches (0 = epoch-end only)")
+    parser.add_argument("--records", default=None,
+                        help="train on a pre-labelled .npz (e.g. from stockfish_label.py) "
+                             "instead of streaming+parsing games. Ignores --samples/--min-elo.")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint in --out directory")
     args = parser.parse_args()
@@ -273,8 +296,12 @@ def main():
 
     device = get_device()
 
-    print(f"Loading dataset: {args.dataset} ...")
-    hf_ds = load_dataset(args.dataset, split="train", streaming=True)
+    # --records supplies positions directly, so don't open the stream at all
+    # (saves the network round-trip and works offline).
+    hf_ds = None
+    if not args.records:
+        print(f"Loading dataset: {args.dataset} ...")
+        hf_ds = load_dataset(args.dataset, split="train", streaming=True)
 
     if args.peek:
         row = next(iter(hf_ds))
@@ -290,9 +317,12 @@ def main():
     model.to(device)  # move BEFORE creating optimizer so state lives on correct device
     optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
-    print(f"Building dataset ({args.samples:,} target positions, min ELO {args.min_elo})...")
-    records = build_records(hf_ds, args.samples, min_elo=args.min_elo)
-    print(f"Dataset ready: {len(records):,} valid positions")
+    if args.records:
+        records = load_records_npz(args.records)
+    else:
+        print(f"Building dataset ({args.samples:,} target positions, min ELO {args.min_elo})...")
+        records = build_records(hf_ds, args.samples, min_elo=args.min_elo)
+        print(f"Dataset ready: {len(records):,} valid positions")
 
     if not records:
         print("No valid positions found. Run with --peek to inspect the dataset fields.")
