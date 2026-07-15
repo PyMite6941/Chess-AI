@@ -6,3 +6,4 @@ __pycache__
 # and served from there; see CHESSNET.md for the export + deploy steps.
 *.pth
 *.onnx
+validation_set.npz
