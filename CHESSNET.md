@@ -65,14 +65,38 @@ the 4096-move space (random = ln(4096) ≈ 8.31):
 | 2 | 3.66 | 0.74 | |
 | 3 | 3.23 | 0.65 | |
 | 4 | 2.71 | 0.44 | |
-| 5 | **2.57** | **0.40** | **currently deployed** — 1.e4→c5 (Sicilian), prioritizes O-O |
+| 5 | 2.57 | 0.40 | 1.e4→c5 (Sicilian), prioritizes O-O |
 | 6 | 2.6783 | 0.5145 | regressed — CosineAnnealingLR reset on resume (see gotchas) |
 | 7 | — | — | trained fine; losses lost to stdout buffering (use `python -u`) |
 | 8 | 2.3024 | 0.3365 | LR stepped down to 2e-4 |
-| 9 | **2.2232** | **0.3088** | best so far — on disk, **not yet deployed** |
+| 9 | 2.2232 | 0.3088 | best *training* loss — but see below, it was memorising |
 
-Losses are only comparable *within* a cycle: each resume streams a different 250K positions.
-A fixed validation set is still the missing piece for measuring this properly.
+### Kaggle run (2026-07-15) — **currently deployed**
+
+One clean GPU run: **1,000,000 positions, 15 epochs, batch 512, lr 2e-4, min-ELO 1700**, on a
+free Kaggle T4 (~1 h). Final training loss: policy **2.5215**, value 0.4917. See `KAGGLE.md`.
+
+**DO NOT compare training losses between these runs.** They disagree with reality:
+
+| | epoch-9 (local) | Kaggle | |
+|---|---|---|---|
+| training loss | **2.2232** | 2.5215 | epoch-9 looks better... |
+| **held-out policy CE** | 3.2655 | **2.8201** | ...but Kaggle actually is |
+| held-out value MSE | 1.2673 | **1.0940** | |
+| held-out top-1 | 25.2% | **28.7%** | |
+| held-out top-5 | 55.8% | **61.3%** | |
+| tactics | 3/5 | 3/5 | tie |
+
+The ranking **flips** on held-out data. Epoch-9's low training loss was **memorisation** — it
+saw the same 250k positions nine times, because `build_records()` re-reads the stream from the
+start on every run (no shuffle, no offset). Reading the training loss alone would have led to
+exactly the wrong deploy decision.
+
+**Always decide with `evaluate.py --compare`, never with training loss.**
+
+Note the held-out **value MSE of ~1.09 is poor** — unsurprising, since the value label is the
+game's final result stamped onto every position. That is the single strongest argument for the
+Stockfish labels in `stockfish_label.py`.
 
 ## Export + deploy
 
