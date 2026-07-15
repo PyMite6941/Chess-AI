@@ -20,12 +20,18 @@ Stockfish fixes both targets:
 Label quality beats label quantity here: ~200k Stockfish-labelled positions should
 beat 1M human-labelled ones, because the thing being imitated is far stronger.
 
-Cost
-----
-Stockfish must analyse every position, so this is CPU-bound (the GPU is idle). At
-depth 10 it's roughly 30-50 ms/position/core. On Kaggle's ~4 cores that's very
-roughly 40-60 min for 200k. Scale --positions to the time you have; measure with
---positions 2000 first rather than trusting that estimate.
+Cost — MEASURED, not guessed
+----------------------------
+Stockfish must analyse every position, so this is CPU-bound (the GPU sits idle).
+
+Measured on Kaggle 2026-07-15: a single engine with Threads=4, analysing one position
+at a time, managed only **~18 pos/s** — 200k would have taken ~3 hours. Stockfish's
+threads scale poorly on one shallow search, so the fix is process parallelism: N
+separate engines on 1 thread each, labelling N positions at once (--workers). That
+scales near-linearly.
+
+Always run a small --positions probe first and read the pos/s line. Do not trust an
+estimate in a docstring, including this one.
 
 Positions come from real games (same HuggingFace stream) so the distribution stays
 realistic — only the LABELS change.
@@ -52,6 +58,7 @@ import time
 import chess
 import chess.engine
 import numpy as np
+from multiprocessing import Pool
 
 from board import board_to_tensor, move_to_index
 
@@ -76,6 +83,40 @@ def find_stockfish(explicit=None):
             return p
     sys.exit("Stockfish not found. Kaggle/Linux: !apt-get -qq install -y stockfish\n"
              "Windows: download from stockfishchess.org and pass --engine PATH")
+
+
+# --- worker-process globals (one Stockfish per worker) ----------------------------
+_ENGINE = None
+_DEPTH = 10
+
+
+def _worker_init(engine_path, depth, threads, hash_mb):
+    """Each worker owns ONE engine. Threads=1 per engine by default: Stockfish's
+    internal threading scales badly on a single shallow search, so N single-threaded
+    engines beat 1 N-threaded engine by a wide margin."""
+    global _ENGINE, _DEPTH
+    _DEPTH = depth
+    _ENGINE = chess.engine.SimpleEngine.popen_uci(engine_path)
+    _ENGINE.configure({"Threads": threads, "Hash": hash_mb})
+
+
+def _label_fen(fen):
+    """Label one position. Returns (fen, best_uci, cp) or None."""
+    try:
+        board = chess.Board(fen)
+        info = _ENGINE.analyse(board, chess.engine.Limit(depth=_DEPTH))
+        pv, score = info.get("pv"), info.get("score")
+        if not pv or score is None:
+            return None
+        best = pv[0]
+        if best not in board.legal_moves:
+            return None
+        cp = score.pov(board.turn).score(mate_score=100_000)
+        if cp is None:
+            return None
+        return (fen, best.uci(), cp)
+    except Exception:
+        return None
 
 
 def iter_positions(dataset, min_elo, skip_games, every_n):
@@ -121,8 +162,13 @@ def main():
     ap.add_argument("--depth", type=int, default=10,
                     help="Stockfish search depth. 10 is a good speed/quality trade; "
                          "8 is ~2x faster, 12 is much slower for modest gain.")
-    ap.add_argument("--threads", type=int, default=4, help="Stockfish threads (Kaggle has ~4 cores)")
-    ap.add_argument("--hash", type=int, default=256, help="Stockfish hash MB")
+    ap.add_argument("--workers", type=int, default=4,
+                    help="parallel Stockfish PROCESSES. This is the real throughput lever — "
+                         "measured ~18 pos/s with 1 engine, near-linear scaling with N engines.")
+    ap.add_argument("--threads", type=int, default=1,
+                    help="threads PER engine. Keep at 1: Stockfish threads scale badly on one "
+                         "shallow search, so more workers beats more threads.")
+    ap.add_argument("--hash", type=int, default=128, help="Stockfish hash MB per engine")
     ap.add_argument("--every-n", type=int, default=4,
                     help="label every Nth ply — consecutive plies are near-duplicates")
     ap.add_argument("--min-elo", type=int, default=1700)
@@ -136,42 +182,32 @@ def main():
     engine_path = find_stockfish(args.engine)
     print(f"Stockfish: {engine_path}")
     print(f"Labelling {args.positions:,} positions at depth {args.depth} "
-          f"({args.threads} threads, every {args.every_n}th ply, min ELO {args.min_elo})")
+          f"({args.workers} workers x {args.threads} thread, every {args.every_n}th ply, "
+          f"min ELO {args.min_elo})")
     print("CPU-bound — the GPU is idle during this. Watch the rate line.\n")
-
-    engine = chess.engine.SimpleEngine.popen_uci(engine_path)
-    engine.configure({"Threads": args.threads, "Hash": args.hash})
 
     X, P, V = [], [], []
     t0 = time.time()
     skipped = 0
+
+    fens = (b.fen() for b in iter_positions(args.dataset, args.min_elo,
+                                            args.skip_games, args.every_n))
+
+    pool = Pool(args.workers, initializer=_worker_init,
+                initargs=(engine_path, args.depth, args.threads, args.hash))
     try:
-        for board in iter_positions(args.dataset, args.min_elo, args.skip_games, args.every_n):
+        for result in pool.imap_unordered(_label_fen, fens, chunksize=8):
             if len(X) >= args.positions:
                 break
-            try:
-                info = engine.analyse(board, chess.engine.Limit(depth=args.depth))
-            except Exception:
+            if result is None:
                 skipped += 1
                 continue
-            pv = info.get("pv")
-            score = info.get("score")
-            if not pv or score is None:
-                skipped += 1
-                continue
-            best = pv[0]
-            if best not in board.legal_moves:
-                skipped += 1
-                continue
-
+            fen, best_uci, cp = result
+            board = chess.Board(fen)
             # Both labels from the side-to-move's perspective, matching board_to_tensor's
             # plane 12 (turn) and the value head's tanh output.
-            cp = score.pov(board.turn).score(mate_score=100_000)
-            if cp is None:
-                skipped += 1
-                continue
             X.append(board_to_tensor(board).astype(np.float32))
-            P.append(np.int64(move_to_index(best)))
+            P.append(np.int64(move_to_index(chess.Move.from_uci(best_uci))))
             V.append(np.float32(np.tanh(cp / CP_SCALE)))
 
             n = len(X)
@@ -184,7 +220,8 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted — saving what we have.")
     finally:
-        engine.quit()
+        pool.terminate()
+        pool.join()
 
     if not X:
         sys.exit("No positions labelled — check Stockfish installed and --min-elo.")
