@@ -147,18 +147,17 @@ or re-upload).
 
 ## Cell B1 — install Stockfish + timed probe
 
+Self-contained — safe to run in a fresh session, and pulls `stockfish_label.py` straight from
+the public repo so there's nothing to upload:
+
 ```python
+# pip install is NOT optional even if Cell 1 ran earlier: a restarted session loses it,
+# and stockfish_label.py then dies with ModuleNotFoundError: No module named 'chess'.
+!pip -q install python-chess datasets
 !apt-get -qq install -y stockfish
-
-import glob, shutil, os
-for name in ("stockfish_label.py",):
-    hits = glob.glob(f"/kaggle/input/**/{name}", recursive=True)
-    assert hits, f"{name} not found — add it to the chessnet-src dataset"
-    shutil.copy(hits[0], f"/kaggle/working/{name}")
-os.chdir("/kaggle/working")
-
+!wget -q -O stockfish_label.py https://raw.githubusercontent.com/PyMite6941/Chess-AI/master/stockfish_label.py
 # Probe 2000 positions to get a REAL rate before committing to a long run.
-!python -u stockfish_label.py --positions 2000 --depth 10 --every-n 4 --out /tmp/probe.npz
+!python -u stockfish_label.py --positions 2000 --depth 10 --every-n 4 --threads 4 --out /tmp/probe.npz
 ```
 
 Read the `pos/s` line and do the arithmetic: `200000 / rate / 60` = minutes for the real run.
@@ -167,6 +166,8 @@ If that's more time than you have, drop `--depth` to 8 (~2x faster) or lower `--
 ## Cell B2 — label for real
 
 ```python
+!pip -q install python-chess datasets
+!apt-get -qq install -y stockfish
 !python -u stockfish_label.py \
     --positions 200000 \
     --depth 10 \
@@ -175,6 +176,9 @@ If that's more time than you have, drop `--depth` to 8 (~2x faster) or lower `--
     --skip-games 20000 \
     --out /kaggle/working/sf_dataset.npz
 ```
+
+(The pip/apt lines are cheap no-ops if already installed, and save you from a
+`ModuleNotFoundError` if the session restarted between cells.)
 
 `--skip-games 20000` keeps this clear of the validation set's games, so the held-out
 comparison stays honest.
