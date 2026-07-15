@@ -1,2 +1,8 @@
 __pycache__
 .venv
+
+# Trained weights — 3.6 MB each, regenerable by training, and they don't diff.
+# The deployed model is committed in portfolio-website/assets/files/chessnet.onnx
+# and served from there; see CHESSNET.md for the export + deploy steps.
+*.pth
+*.onnx

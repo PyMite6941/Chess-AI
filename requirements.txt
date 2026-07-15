@@ -1,0 +1,4 @@
+torch>=2.0
+chess>=1.10
+numpy>=1.24
+datasets>=2.14
