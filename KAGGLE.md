@@ -1,7 +1,7 @@
 # Training ChessNet on Kaggle's free GPU
 
 The laptop does ~18 minutes per epoch on a 15W Core 7 150U and fights Minecraft for the CPU.
-A free Kaggle P100 does the whole run in minutes. `train_supervised.py` already supports it —
+A free Kaggle T4 does the whole run in minutes. `train_supervised.py` already supports it —
 it auto-detects CUDA and takes `--out /kaggle/working`.
 
 **Cost: $0.** Kaggle gives ~30 GPU hours/week free. No card, no GCP, no billing.
@@ -76,7 +76,7 @@ except Exception as e:
 |---|---|
 | `--samples 1000000` | 4x the laptop's 250k. The GPU can chew it, and more data is the main lever left. |
 | `--epochs 15` | One clean run — see the LR note below. |
-| `--batch 512` | 256 is a CPU-sized batch; a P100 has the memory to go bigger and faster. |
+| `--batch 512` | 256 is a CPU-sized batch; a T4 (16 GB) has the memory to go bigger and faster. |
 | `--lr 2e-4` | What was working locally by epoch 9. |
 | `--min-elo 1700` | Matches the recent local cycles. |
 | `--out /kaggle/working` | Kaggle only lets you download from here. |
