@@ -2,45 +2,117 @@
 
 Roadmap for finishing / strengthening the Chess AI. See `CHESSNET.md` for how it all works.
 
-## Current state (2026-07)
+---
 
-- **Deployed model:** 5-epoch supervised net, policy loss **2.57**, value **0.40**. Live at
-  https://ai-lab-bice.vercel.app/projects/chess-ai — plays book openings (1.e4→c5), prioritizes
-  castling, and now runs behind an in-browser **alpha-beta search** so it won't hang pieces.
-- **Latest checkpoint on disk:** `chessnet_checkpoint.pth` = **next epoch 10** (epochs 8 and 9
-  trained 2026-07-15 at `--lr 2e-4`, min-ELO 1700). `chessnet.pth` = those epoch-9 weights.
-  `chessnet_1epoch_backup.pth` = safety backup.
-- **The trained checkpoint is now clearly better than the deployed model** (policy 2.2232 vs
-  2.57) but has **not** been exported or deployed. See "Deploy the epoch-9 model?" below.
-- **The LR-reset gotcha is confirmed real, and the fix works.** Epoch 6 regressed to 2.6783 —
-  *worse* than epoch 5's 2.57 — because CosineAnnealingLR restarts each resume and jumped the
-  LR back up. Stepping `--lr` down each cycle (4e-4 → 3e-4 → 2e-4) reversed it: epoch 8 hit
-  2.3024, epoch 9 hit **2.2232**, the best so far and inside the 2.2–2.4 plateau target.
-- Epoch 7's numbers were lost to stdout buffering (see the `python -u` gotcha) — weights fine,
-  printout gone.
-- Training has been interrupted twice by machine restarts — nothing lost either time, just resume.
+## RESUME HERE (paused 2026-07-16 ~01:00)
 
-### Progress (min-ELO 1700 cycles)
+**The Stockfish-labelled model was trained on Kaggle but never got off Kaggle.** Everything
+below is the state to pick up from.
+
+### The one open question
+
+**Does `/kaggle/working` still contain the files?** The draft session was torn down and
+restarted several times. `/kaggle/working` persists across restarts *for saved notebooks*;
+whether it survived for this **draft** (version 0, never saved) is **unverified** — the kernel
+was stuck in "Draft Session Starting" when work paused, so the listing never ran.
+
+Notebook: https://www.kaggle.com/code/mattgresham/notebook0e22426def/edit
+
+First command to run in the notebook **console**:
+
+```python
+import os; print([(f, round(os.path.getsize('/kaggle/working/'+f)/1e6,2))
+                  for f in sorted(os.listdir('/kaggle/working')) if f.endswith(('.pth','.npz'))])
+```
+
+**If the files are there** — download `chessnet.pth` + `sf_dataset.npz` from the right sidebar
+(Output → /kaggle/working), then:
+
+```bash
+# RENAME on the way in — chessnet.pth would clobber the DEPLOYED model
+mv ~/Downloads/chessnet.pth  "Chess AI/chessnet_stockfish.pth"
+mv ~/Downloads/sf_dataset.npz "Chess AI/sf_dataset.npz"
+cd "Chess AI" && export PYTHONIOENCODING=utf-8 PYTHONUTF8=1
+python evaluate.py --compare chessnet_stockfish.pth chessnet_kaggle.pth
+```
+
+**If the files are gone** — re-run Cells B2 then B3 in `KAGGLE.md` (~47 min labelling + ~1 min
+training), and **hit Save Version immediately afterwards** so the output becomes a durable
+versioned artifact downloadable via the Kaggle API, instead of depending on the Output panel.
+That is the fix that should have been used once the tab started freezing.
+
+### Results of the Stockfish run (2026-07-15, training loss only — NOT a verdict)
+
+15/15 epochs on 200,000 Stockfish-labelled positions, batch 512, lr 2e-4, T4:
+
+| | final |
+|---|---|
+| policy | 3.4795 |
+| value | **0.0920** |
+| file | `chessnet.pth`, 3.73 MB |
+
+- **Value 0.0920 vs ~0.3 for human labels** is the headline — exactly what the Stockfish value
+  target was meant to fix. Encouraging, but it is *training* loss.
+- **Policy 3.4795 is NOT comparable to the human runs' ~2.5.** Different label distribution:
+  predicting Stockfish's best move out of 4096 is a much harder target than predicting what a
+  1700 player did. Comparing the two numbers is meaningless.
+- Both losses were **still falling at epoch 15** — not converged, more epochs would likely help.
+
+### The trap waiting at the comparison step
+
+`evaluate.py`'s held-out set is **human-labelled** — it measures "predicts what a 1700 player
+played." The Stockfish model was trained *not* to do that. **It may score worse on held-out
+policy while being the stronger engine.** Do not read a policy regression as failure, and do
+not read it as success either. The **tactics suite** is the more meaningful signal here, and
+value MSE is directly comparable. If the result is mixed, say so — don't pick the flattering
+framing.
+
+---
+
+## Current state (2026-07-15)
+
+- **Deployed model:** the **Kaggle human-label net** (1M positions, 15 epochs, min-ELO 1700).
+  Live at https://ai-lab-bice.vercel.app/projects/chess-ai, served as `chessnet.onnx`
+  (sha256 prefix **a7cf8632649a21dd**, 3,698,740 bytes) from GitHub Pages via the AI Lab
+  `/api/assets` proxy. **Verified live on both surfaces 2026-07-16.**
+- **Local models** in `Chess AI/`:
+  - `chessnet_kaggle.pth` — the deployed weights (human labels)
+  - `chessnet_epoch9_backup.pth` — the previous incumbent (epoch 9, local)
+  - `chessnet.pth` / `chessnet_checkpoint.pth` — the old local epoch-9 lineage
+- **`chessnet_stockfish.pth` does not exist yet** — that's the file stuck on Kaggle.
+
+### The lesson that decided the current deployment
+
+Training loss and held-out data **disagreed, and the held-out set was right**:
+
+| | epoch-9 (local) | Kaggle | |
+|---|---|---|---|
+| training loss | **2.2232** | 2.5215 | epoch-9 looks better... |
+| held-out policy CE | 3.2655 | **2.8201** | ...but Kaggle actually is |
+| held-out value MSE | 1.2673 | **1.0940** | |
+| held-out top-1 | 25.2% | **28.7%** | |
+| held-out top-5 | 55.8% | **61.3%** | |
+| tactics | 3/5 | 3/5 | tie |
+
+The ranking **flips**. Epoch-9's low training loss was **memorisation** — `build_records()`
+re-reads the HF stream from the start every run, so it saw the same 250k positions 9×.
+Reading training loss alone would have deployed the worse model.
+
+**Always decide with `evaluate.py --compare`, never with training loss.**
+
+### Progress (min-ELO 1700 local cycles — historical)
 
 | Epoch | policy | value | notes |
 |---|---|---|---|
-| 5 | 2.57 | 0.40 | **currently deployed** as `chessnet.onnx` |
+| 5 | 2.57 | 0.40 | was deployed until 2026-07-15 |
 | 6 | 2.6783 | 0.5145 | regressed — LR reset at `--lr 4e-4` |
 | 7 | — | — | lost to stdout buffering (`--lr 3e-4`) |
 | 8 | 2.3024 | 0.3365 | `--lr 2e-4` |
-| 9 | **2.2232** | **0.3088** | best; on disk, not deployed |
+| 9 | **2.2232** | **0.3088** | best training loss — but memorisation (see above) |
 
-### Deploy the epoch-9 model?
-
-It is a real improvement on paper, but losses across cycles aren't strictly comparable (each
-cycle streams a *different* 250K positions). Before overwriting the deployed model, either
-A/B it by playing both, or build the fixed validation set (see Loose ends). The deployed
-epoch-5 model is known-good and plays real opening theory; don't replace it blind.
-
-> Note: losses aren't directly comparable between cycles (each streams a *different* 250K
-> positions). To know if a new checkpoint is truly better, either eval on a fixed held-out set
-> or just A/B the deployed model by playing it. Don't overwrite the deployed `chessnet.onnx`
-> with a checkpoint unless it clearly plays better.
+**The LR-reset gotcha is confirmed real, and the fix works.** Epoch 6 regressed *below* epoch 5
+because CosineAnnealingLR restarts each resume and jumps the LR back up. Stepping `--lr` down
+each cycle (4e-4 → 3e-4 → 2e-4) reversed it. One uninterrupted GPU run avoids this entirely.
 
 ---
 

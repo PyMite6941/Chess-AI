@@ -49,12 +49,15 @@ Cell 1 and Cells 3–4 are shared. **Option B is the better model** — see why 
 ```python
 !pip -q install python-chess datasets
 
-import glob, shutil, os
-for name in ("model.py", "board.py", "train_supervised.py"):
-    hits = glob.glob(f"/kaggle/input/**/{name}", recursive=True)
-    assert hits, f"{name} not found under /kaggle/input — did the dataset upload?"
-    shutil.copy(hits[0], f"/kaggle/working/{name}")
+# Pull the code from the REPO, not from /kaggle/input. The uploaded chessnet-src dataset goes
+# stale the moment you edit a script locally, and the failure is silent + confusing: on
+# 2026-07-15 the training run died with `unrecognized arguments: --records` because the
+# uploaded train_supervised.py predated that flag. wget is always current.
+import os
 os.chdir("/kaggle/working")
+BASE = "https://raw.githubusercontent.com/PyMite6941/Chess-AI/master"
+for name in ("model.py", "board.py", "train_supervised.py", "stockfish_label.py", "evaluate.py"):
+    assert os.system(f"wget -q -O {name} {BASE}/{name}") == 0, f"failed to fetch {name}"
 print("code ready:", [f for f in os.listdir() if f.endswith(".py")])
 
 # HARD CHECK. torch.cuda.is_available() is NOT enough — it returns True even on the
@@ -180,8 +183,9 @@ If that's more time than you have, drop `--depth` to 8 (~2x faster) or lower `--
 (The pip/apt lines are cheap no-ops if already installed, and save you from a
 `ModuleNotFoundError` if the session restarted between cells.)
 
-**Measured 2026-07-15: ~48 pos/s → 200k in ~70 min.** (`--workers` is the throughput
-lever, not `--threads` — see the probe note above.)
+**Measured 2026-07-15 on the full 200k run: ~71 pos/s → 200k in ~47 min, 0 skipped.**
+(`--workers` is the throughput lever, not `--threads` — see the probe note above. The rate
+climbs for the first few thousand positions as the pool warms up; read it at 5k+, not at 500.)
 
 ### `--skip-games 0` is deliberate — do NOT set it to 20000
 
@@ -195,9 +199,6 @@ which sits comfortably inside the first 20,000 and never touches validation.
 
 If you raise `--positions` a lot, check the arithmetic again:
 `positions / (19 per game)` must stay **well under 20,000 games**.
-
-`--skip-games 20000` keeps this clear of the validation set's games, so the held-out
-comparison stays honest.
 
 `--every-n 4` labels every 4th ply — consecutive plies are near-duplicate positions, so
 labelling all of them spends Stockfish time for almost no extra information.
@@ -330,6 +331,34 @@ not sufficient evidence — that's the whole reason `evaluate.py` exists.
 
 ## Gotchas
 
+- **SAVE A VERSION once a long run finishes.** A draft notebook (version 0) has no downloadable
+  artifact — the only route to the files is the Output panel in the editor tab. On 2026-07-15
+  that tab froze repeatedly and the trained model was stranded on Kaggle. A saved version is
+  durable and pullable with `kaggle kernels output mattgresham/<notebook> -p .` (needs
+  `~/.kaggle/kaggle.json`, which is **not** currently set up on this laptop). Note "Save & Run
+  All" *re-runs the whole notebook* — including a 47-min labelling cell — so use **Quick Save**.
+- **The editor tab freezes when a cell has huge output.** The labelling cell printed a rate line
+  every 500 positions (~400 lines) and the renderer became unresponsive to *every* browser
+  action — screenshots, clicks, typing. Reloading the page fixed it (the reloaded notebook was
+  empty of output and behaved fine). Print progress **every 5,000**, not every 500.
+- **A frozen tab shows STALE OUTPUT INDEFINITELY.** This is the dangerous one: the display sat
+  at `176,500/200,000 ETA 5 min` for 30+ minutes *after the run had already finished*, and
+  earlier showed a dead-looking toolbar while the kernel was healthy. **Never diagnose a run
+  from the rendered output.** Ask the kernel:
+  ```python
+  import numpy as np; d=np.load('/kaggle/working/sf_dataset.npz'); print(d['X'].shape)
+  ```
+  Shape/mtime is truth; the progress bar is decoration.
+- **A restarted session loses pip installs but keeps `/kaggle/working`** (for saved notebooks —
+  unverified for drafts). After any restart, re-run `!pip -q install python-chess datasets` or
+  the next script dies with `ModuleNotFoundError: No module named 'chess'`.
+- **Run long jobs detached and poll the log**, so a frozen renderer can't hide them:
+  ```python
+  import subprocess; subprocess.Popen('cd /kaggle/working && nohup python -u SCRIPT ... > /kaggle/working/run.log 2>&1 &', shell=True)
+  print(open('/kaggle/working/run.log').read()[-800:])   # poll from the console
+  ```
+- **Interactive sessions idle out** with an "Are you still there?" dialog after ~40 min of no
+  *editor interaction* — kernel activity does not count. Dismiss it to reset the clock.
 - **Verify the accelerator actually attached** (Cell 1). A CPU Kaggle notebook is *slower* than
   the laptop, and you'd burn weekly quota for nothing.
 - **P100 is broken, T4 works** — see the Setup note.
