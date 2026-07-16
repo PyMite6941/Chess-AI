@@ -4,42 +4,58 @@ Roadmap for finishing / strengthening the Chess AI. See `CHESSNET.md` for how it
 
 ---
 
-## RESUME HERE (paused 2026-07-16 ~01:00)
+## RESUME HERE (updated 2026-07-16 ~morning)
 
-**The Stockfish-labelled model was trained on Kaggle but never got off Kaggle.** Everything
-below is the state to pick up from.
+### Verified: the files SURVIVED
 
-### The one open question
-
-**Does `/kaggle/working` still contain the files?** The draft session was torn down and
-restarted several times. `/kaggle/working` persists across restarts *for saved notebooks*;
-whether it survived for this **draft** (version 0, never saved) is **unverified** — the kernel
-was stuck in "Draft Session Starting" when work paused, so the listing never ran.
+`/kaggle/working` **does persist across a draft-session teardown** — confirmed empirically this
+morning. A fresh session listed `chessnet.pth` (3.73 MB, the Stockfish model), `sf_dataset.npz`
+(the 200k labels), and the renamed backups (`chessnet_human1m.pth` = the deployed human model,
+`chessnet_checkpoint.pth`). Nothing was lost.
 
 Notebook: https://www.kaggle.com/code/mattgresham/notebook0e22426def/edit
 
-First command to run in the notebook **console**:
+### A held-out comparison is RUNNING ON KAGGLE (launched ~morning of 2026-07-16)
 
-```python
-import os; print([(f, round(os.path.getsize('/kaggle/working/'+f)/1e6,2))
-                  for f in sorted(os.listdir('/kaggle/working')) if f.endswith(('.pth','.npz'))])
-```
-
-**If the files are there** — download `chessnet.pth` + `sf_dataset.npz` from the right sidebar
-(Output → /kaggle/working), then:
+Instead of fighting the flaky browser download, the comparison runs *on Kaggle* — the live
+session already has the GPU, the Stockfish model, and the deployed human model side by side.
+Detached job, logging to `/kaggle/working/eval.log`:
 
 ```bash
-# RENAME on the way in — chessnet.pth would clobber the DEPLOYED model
-mv ~/Downloads/chessnet.pth  "Chess AI/chessnet_stockfish.pth"
-mv ~/Downloads/sf_dataset.npz "Chess AI/sf_dataset.npz"
-cd "Chess AI" && export PYTHONIOENCODING=utf-8 PYTHONUTF8=1
-python evaluate.py --compare chessnet_stockfish.pth chessnet_kaggle.pth
+python -u evaluate.py --build --skip-games 20000 --val-positions 5000   # ~10-20 min stream
+python -u evaluate.py --compare chessnet.pth chessnet_human1m.pth        # chessnet.pth = Stockfish
 ```
 
-**If the files are gone** — re-run Cells B2 then B3 in `KAGGLE.md` (~47 min labelling + ~1 min
-training), and **hit Save Version immediately afterwards** so the output becomes a durable
-versioned artifact downloadable via the Kaggle API, instead of depending on the Output panel.
-That is the fix that should have been used once the tab started freezing.
+**FIRST THING ON RESUME — read the result** (session may have idled out; if so, re-run the two
+lines above — the models + npz persist):
+
+```python
+print(open('/kaggle/working/eval.log').read()[-2500:])
+```
+
+Read it with the trap below in mind. `chessnet.pth` is the Stockfish model; `chessnet_human1m.pth`
+is what's deployed today.
+
+### Then, ONLY IF the Stockfish model wins
+
+Download `chessnet.pth` (Output panel → /kaggle/working), and:
+
+```bash
+mv ~/Downloads/chessnet.pth "Chess AI/chessnet_stockfish.pth"   # RENAME — chessnet.pth clobbers deployed
+cd "Chess AI" && export PYTHONIOENCODING=utf-8 PYTHONUTF8=1
+python export_onnx.py --checkpoint chessnet_stockfish.pth --output chessnet.onnx
+cp chessnet.onnx ../portfolio-website/assets/files/chessnet.onnx
+cd ../portfolio-website && git add assets/files/chessnet.onnx && git commit && git push
+```
+
+Also worth grabbing `sf_dataset.npz` once (the expensive 47-min artifact) so relabelling is
+never needed. **Consider Quick Save on the notebook** to make the outputs a durable version —
+then `kaggle kernels output` works and the Output panel is never the bottleneck again.
+
+### If the files are ever gone
+
+Re-run Cells B2 then B3 in `KAGGLE.md` (~47 min labelling + ~1 min training), and **Quick Save
+immediately** so the output is a durable versioned artifact.
 
 ### Results of the Stockfish run (2026-07-15, training loss only — NOT a verdict)
 
