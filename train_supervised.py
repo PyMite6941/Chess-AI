@@ -98,8 +98,18 @@ RESULT_TO_OUTCOME = {"1-0": 1.0, "0-1": -1.0, "1/2-1/2": 0.0}
 TERMINAL_TOKENS = {"1-0", "0-1", "1/2-1/2", "*"}
 
 
-def parse_game(transcript, result, min_elo):
-    """Replay a game transcript and return (tensor, policy_idx, value) per position."""
+def parse_game(transcript, result, min_elo, value_discount=1.0):
+    """Replay a game transcript and return (tensor, policy_idx, value) per position.
+
+    value_discount (<=1.0) softens the value label the further a position is from the
+    game's end. The default 1.0 reproduces the original label: the final result stamped
+    at full magnitude onto EVERY position — which is very noisy (move 3 of a game lost on
+    move 60 is labelled "losing" even if the position is dead equal, and held-out value
+    MSE stalls near ~1.0 as a result). With e.g. 0.97, a position N plies from the end is
+    labelled outcome * 0.97**N, so early positions get a smaller-magnitude (less
+    confident) target while positions near the decisive end keep the full signal. This is
+    an opt-in training-quality lever; it does not change the deployed pipeline.
+    """
     outcome = RESULT_TO_OUTCOME.get(result)
     if outcome is None:
         return []
@@ -118,11 +128,16 @@ def parse_game(transcript, result, min_elo):
             break
         tensor = board_to_tensor(board)
         policy_idx = move_to_index(move)
-        # Value from current player's perspective
-        value = outcome if board.turn == chess.WHITE else -outcome
-        positions.append((tensor, policy_idx, value))
+        # Signed result from the side-to-move's perspective (value applied below).
+        sign = 1.0 if board.turn == chess.WHITE else -1.0
+        positions.append([tensor, policy_idx, sign * outcome])
         board.push(move)
-    return positions
+
+    if value_discount < 1.0 and positions:
+        n = len(positions)
+        for i, pos in enumerate(positions):
+            pos[2] *= value_discount ** (n - 1 - i)   # plies from the end
+    return [tuple(p) for p in positions]
 
 
 def load_records_npz(path):
@@ -145,9 +160,17 @@ def load_records_npz(path):
     return [(X[i], int(P[i]), float(V[i])) for i in range(len(X))]
 
 
-def build_records(hf_dataset, max_samples, min_elo=1500):
+def build_records(hf_dataset, max_samples, min_elo=1500, skip_games=0, value_discount=1.0):
+    """Stream games and build (tensor, policy_idx, value) records.
+
+    skip_games: skip the first N qualifying games before collecting. Use this to train on a
+    DIFFERENT slice than the deployed run, or to move past a held-out region. NOTE the
+    held-out set in evaluate.py is built from games AFTER 20,000 — so for a bigger training
+    run you push the val boundary out (build val after e.g. 100,000) and train on games
+    0..100,000, rather than leaving them unused.
+    """
     records = []
-    games_seen = games_skipped = 0
+    games_seen = games_skipped = qualifying = 0
     for row in hf_dataset:
         if len(records) >= max_samples:
             break
@@ -162,7 +185,10 @@ def build_records(hf_dataset, max_samples, min_elo=1500):
             if white_elo < min_elo or black_elo < min_elo:
                 games_skipped += 1
                 continue
-            positions = parse_game(transcript, result, min_elo)
+            qualifying += 1
+            if qualifying <= skip_games:
+                continue
+            positions = parse_game(transcript, result, min_elo, value_discount=value_discount)
             if not positions:
                 games_skipped += 1
                 continue
@@ -278,7 +304,15 @@ def main():
                         help="Mount Google Drive (Colab only) and save there")
     parser.add_argument("--dataset", default="adamkarvonen/chess_games")
     parser.add_argument("--min-elo", type=int, default=1500,
-                        help="Skip games where either player is below this ELO")
+                        help="Skip games where either player is below this ELO. Measured on the "
+                             "dataset: median lower-ELO is ~1884, so 1700=87%% of games, "
+                             "1900=47%%, 2100=13%% (a stronger imitation target for less data).")
+    parser.add_argument("--skip-games", type=int, default=0,
+                        help="Skip the first N qualifying games (train a different slice; keep "
+                             "clear of the held-out region). See build_records docstring.")
+    parser.add_argument("--value-discount", type=float, default=1.0,
+                        help="Soften the value label by distance from game end (e.g. 0.97). "
+                             "1.0 = original noisy 'final result on every position' label.")
     parser.add_argument("--peek", action="store_true",
                         help="Print first dataset row and exit")
     parser.add_argument("--save-every", type=int, default=500,

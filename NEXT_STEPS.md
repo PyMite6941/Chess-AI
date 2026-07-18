@@ -4,6 +4,68 @@ Roadmap for finishing / strengthening the Chess AI. See `CHESSNET.md` for how it
 
 ---
 
+## A better way to train — MEASURED findings (2026-07-16)
+
+After the Stockfish run lost, I profiled the actual training pipeline against the real dataset
+(`adamkarvonen/chess_games`) instead of guessing. Numbers, and what they rule in/out:
+
+**What I measured (60k-position build, min-ELO 1700, same pipeline as the deployed run):**
+
+| finding | number | implication |
+|---|---|---|
+| distinct positions | **92.4%** (only 7.6% dupes) | dedup is a *small* lever — de-prioritised |
+| opening plies (0–9) | **13.1%** of positions | openings are NOT over-represented; ply-sampling is small too |
+| games per 60k positions | **785** (~76 plies/game) | 1M positions ≈ **13k games** |
+| dataset lower-ELO median | **1884** | min-ELO 1700 trains on *below-to-median* players |
+| games qualifying ≥1900 / ≥2100 | **46% / 13%** | 2000–2100 is the stronger-player sweet spot; ≥2300 too sparse (1.4%) |
+
+**The two hypotheses I *disproved* by measuring:** opening over-representation and duplicate
+positions. Both are <15%. I did NOT build dedup/ply-sampling — they weren't worth it. (Measuring
+first is the lesson the Stockfish run taught.)
+
+**The levers the evidence actually supports, ranked:**
+
+1. **Raise min-ELO 1700 → ~2000 (imitation-quality).** The deployed net imitates *below-median*
+   (~1884) players. 1900–2000 is above median at ~46% data; 2100 is top-13%. Cleanest quality
+   win, no code — just `--min-elo 2000`. Fewer games qualify, so stream further / raise
+   `--samples`.
+2. **More data by moving the val boundary out (quantity).** Training is capped: a 1M-position run
+   already eats ~13k of the ~20k games before the held-out region (val = games after 20,000). To
+   scale, rebuild val from games after e.g. **100,000** and train on games 0–100,000 (~5–8M
+   positions) with `--skip-games`/higher `--samples`. Then train **30–50 epochs to a real policy
+   plateau** (the losing run was still falling at epoch 15). One clean run — no `--resume` (LR
+   reset).
+3. **Value-target discounting (value-head quality).** The value label is the final result stamped
+   on every position → held-out value MSE stalls ~1.0. **Implemented** as opt-in
+   `--value-discount 0.97` (default 1.0 = unchanged, deployed pipeline untouched). Softens
+   early-position labels toward 0, keeps the decisive endgame at full signal. A/B it with
+   `evaluate.py --compare`.
+4. **Board-encoding gap (architectural ceiling).** `board.py` uses **13 planes and encodes NO
+   castling rights, en-passant, or repetition** — the net literally cannot see whether castling
+   is legal. AlphaZero-style nets use ~19–20 planes. Adding castling+EP planes is the biggest
+   *true* ceiling for a net already at 27% top-1, BUT it requires matching the JS encoder in
+   `../ai-lab/app/components/ChessDemo.js` (which builds the 13 planes in-browser) or the ONNX
+   input shape breaks. Medium project — do it deliberately, both sides together.
+5. **Capacity + augmentation.** 64ch×5 blocks (~0.9M params) is small; 128×10 helps *if* data is
+   scaled first (but slows browser inference — measure the 1.4 s budget). Horizontal-mirror
+   augmentation (file a↔h) is a free ~2× in the data-limited regime; skip it for positions with
+   castling rights. Not yet implemented.
+
+**Recommended next experiment (paste-ready, all on Kaggle):**
+```bash
+# stronger players + softer value labels + more epochs, one clean run
+python -u train_supervised.py --min-elo 2000 --samples 1000000 --epochs 30 \
+    --batch 512 --lr 2e-4 --value-discount 0.97 --out /kaggle/working
+# build a matching held-out set and compare against the DEPLOYED model
+python -u evaluate.py --build --skip-games 20000 --val-positions 5000
+python -u evaluate.py --compare chessnet.pth chessnet_human1m.pth
+# deploy only if it wins held-out AND tactics. Quick Save the version (durable artifact).
+```
+Higher-upside than any of the above long-term: **MCTS self-play** (`selfplay.py`, section below)
+— the only path that goes *beyond* imitating humans at all.
+
+---
+
 ## VERDICT (2026-07-16): the Stockfish run LOST — not deployed
 
 The 200k-position Stockfish model was evaluated on a fresh human-labelled held-out set (5,000
