@@ -329,6 +329,36 @@ needed** for a model-only change.
 **Deploy only if it wins on the held-out set AND doesn't regress on tactics.** Training loss is
 not sufficient evidence — that's the whole reason `evaluate.py` exists.
 
+## Browser-free workflow via the Kaggle API (STRONGLY preferred)
+
+The interactive notebook editor froze constantly under RAM pressure (heavy cell output + the
+browser). The API sidesteps it entirely. One-time setup: token from kaggle.com/settings/api →
+save to `~/.kaggle/kaggle.json` (or the newer `~/.kaggle/access_token`), then
+`pip install kaggle`.
+
+Run a training job as a **headless batch kernel** (a folder with `train_batch.py` +
+`kernel-metadata.json`):
+
+```bash
+kaggle kernels push -p <folder> --accelerator NvidiaTeslaT4   # launch on Kaggle's GPU
+kaggle kernels status mattgresham/<slug>                       # poll: RUNNING / COMPLETE / ERROR
+kaggle kernels output mattgresham/<slug> -p <dir>              # download outputs when COMPLETE
+```
+
+- **PIN THE T4.** `machine_shape: "NvidiaTeslaT4"` in the metadata AND `--accelerator
+  NvidiaTeslaT4` on push. Batch kernels otherwise default to a **P100 (sm_60)**, which Kaggle's
+  torch 2.10+cu128 cannot run — the kernel ERRORs at the first CUDA op with *"no kernel image is
+  available for execution on the device"* and an empty log (hit for real 2026-07-18).
+- **Tee your own log.** Script kernels' captured log came back empty. Have the batch script
+  `... 2>&1 | tee /kaggle/working/run.log` so the full transcript is downloadable regardless.
+- **A `.pth` is downloadable once the kernel COMPLETEs** — no Save-Version dance, no Output panel.
+- `kaggle kernels output` only pulls from a completed run; you can't peek mid-run. Poll status.
+- The network to `api.kaggle.com` / `kaggleusercontent.com` can be flaky — wrap downloads in a
+  small retry loop.
+
+The staged kernel used for the v2 run lives at `~/kaggle_chessnet_v2/` (train_batch.py +
+kernel-metadata.json) — copy it as a template for the next batch job.
+
 ## Gotchas
 
 - **SAVE A VERSION once a long run finishes.** A draft notebook (version 0) has no downloadable

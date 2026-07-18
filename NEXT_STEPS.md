@@ -4,6 +4,41 @@ Roadmap for finishing / strengthening the Chess AI. See `CHESSNET.md` for how it
 
 ---
 
+## v2 experiment VERDICT (2026-07-18): mixed, NOT deployed
+
+Ran the recommended recipe headless on Kaggle (via API, no browser): **min-ELO 2000 +
+`--value-discount 0.97` + 30 epochs**, 1M positions on a T4, with a leak-free held-out set at
+the same min-ELO 2000. Trained cleanly and converged (policy plateaued 2.2255→2.2178).
+
+Compared locally vs the deployed model (`chessnet_kaggle.pth`):
+
+| metric | v2 | deployed | winner |
+|---|---|---|---|
+| policy CE | 2.7049 | 2.8178 | v2 |
+| value MSE | 1.0892 | **0.9539** | deployed |
+| top-1 % | 28.58 | 28.02 | v2 (barely) |
+| top-5 % | 63.48 | 60.96 | v2 |
+| tactics | 2/5 | **3/5** | deployed |
+
+**NOT deployed** — v2 regresses on tactics (the objective, distribution-free signal), and its
+policy edge is marginal *and* confounded: the held-out set is min-ELO 2000, which is v2's own
+training distribution (home-field advantage the 1700-trained deployed model doesn't get). Even
+with that advantage v2 doesn't clearly win. Deployed model stays (`a7cf8632649a21dd`).
+
+**What this tells us:** two supervised recipe experiments (Stockfish labels, then stronger
+players + softer value + more epochs) have now *failed to beat* the deployed 1M/1700/15-epoch
+model. Data/hyperparameter tweaks are hitting a ceiling. The `--value-discount` idea didn't
+help (value MSE worse — partly because discounted targets score badly against ±1 outcome
+labels). **The remaining real levers are architectural, not recipe:** the board-encoding gap
+(no castling/en-passant planes, needs the JS encoder updated in lockstep) and MCTS self-play.
+That is where effort should go next, not more supervised-label variations.
+
+Infra note: batch kernels default to **P100 (sm_60, incompatible with Kaggle torch)** — must
+pin `machine_shape: NvidiaTeslaT4` / `--accelerator NvidiaTeslaT4`. The whole API workflow
+(push → poll → download → compare locally) is browser-free and worked; keep using it.
+
+---
+
 ## A better way to train — MEASURED findings (2026-07-16)
 
 After the Stockfish run lost, I profiled the actual training pipeline against the real dataset
