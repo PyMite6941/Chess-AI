@@ -4,75 +4,50 @@ Roadmap for finishing / strengthening the Chess AI. See `CHESSNET.md` for how it
 
 ---
 
-## RESUME HERE (updated 2026-07-16 ~morning)
+## VERDICT (2026-07-16): the Stockfish run LOST — not deployed
 
-### Verified: the files SURVIVED
+The 200k-position Stockfish model was evaluated on a fresh human-labelled held-out set (5,000
+positions from games after the first 20,000) plus the tactics suite, against the deployed
+human-label model. **It lost on every metric, decisively:**
 
-`/kaggle/working` **does persist across a draft-session teardown** — confirmed empirically this
-morning. A fresh session listed `chessnet.pth` (3.73 MB, the Stockfish model), `sf_dataset.npz`
-(the 200k labels), and the renamed backups (`chessnet_human1m.pth` = the deployed human model,
-`chessnet_checkpoint.pth`). Nothing was lost.
+| metric | chessnet.pth (Stockfish) | chessnet_human1m.pth (deployed) | winner |
+|---|---|---|---|
+| policy CE | 6.0811 | **2.9778** | deployed |
+| value MSE | 1.1424 | **0.9923** | deployed |
+| top-1 % | 9.56 | **26.68** | deployed |
+| top-5 % | 22.02 | **57.86** | deployed |
+| tactics | 1/5 | **3/5** | deployed |
 
-Notebook: https://www.kaggle.com/code/mattgresham/notebook0e22426def/edit
+**The deployed model stays. `chessnet.onnx` = `a7cf8632649a21dd`, unchanged.**
 
-### A held-out comparison is RUNNING ON KAGGLE (launched ~morning of 2026-07-16)
+### Why it lost — and what to fix if retrying
 
-Instead of fighting the flaky browser download, the comparison runs *on Kaggle* — the live
-session already has the GPU, the Stockfish model, and the deployed human model side by side.
-Detached job, logging to `/kaggle/working/eval.log`:
+The magnitude is the tell. top-1 of **9.56%** and policy CE **6.08** (held-out) vs a training
+policy loss of only 3.48 is a huge generalisation gap — this model is barely past early-epoch
+quality. Two fair, objective signals (tactics 1/5, top-1 9.56%) both say it plays clearly
+weaker chess. Root causes:
 
-```bash
-python -u evaluate.py --build --skip-games 20000 --val-positions 5000   # ~10-20 min stream
-python -u evaluate.py --compare chessnet.pth chessnet_human1m.pth        # chessnet.pth = Stockfish
-```
+1. **Undertrained.** Training policy loss was *still falling* at epoch 15 (3.4795). 15 epochs
+   was not enough for the policy head to learn Stockfish's single best move — a far sparser,
+   harder target over 4096 classes than "imitate the 1700 human."
+2. **Too little data.** 200k Stockfish positions vs 1M human positions. Label *quality* did not
+   make up for 5× less *quantity* here, contrary to the hope.
+3. The great training value loss (0.0920) **did not transfer** (held-out 1.1424). Caveat: the
+   held-out value label is the game *outcome* (±1/0), while the Stockfish value head predicts a
+   continuous *eval*, so this metric is somewhat unfair to it — but tactics + policy don't rely
+   on that nuance and are clearly worse, so the verdict stands regardless.
 
-**FIRST THING ON RESUME — read the result** (session may have idled out; if so, re-run the two
-lines above — the models + npz persist):
+**If you retry Stockfish labels:** label **500k–1M** positions (hours of CPU — budget it, save a
+Kaggle version so it's durable) and train **30–50 epochs** until policy loss actually plateaus.
+Anything less repeats this. Honestly, MCTS self-play (`selfplay.py`, roadmap item 3) is the
+higher-upside path to a genuinely stronger net than more supervised Stockfish labels.
 
-```python
-print(open('/kaggle/working/eval.log').read()[-2500:])
-```
+### Artifacts (still on Kaggle `/kaggle/working`, persist across sessions)
 
-Read it with the trap below in mind. `chessnet.pth` is the Stockfish model; `chessnet_human1m.pth`
-is what's deployed today.
-
-### Then, ONLY IF the Stockfish model wins
-
-Download `chessnet.pth` (Output panel → /kaggle/working), and:
-
-```bash
-mv ~/Downloads/chessnet.pth "Chess AI/chessnet_stockfish.pth"   # RENAME — chessnet.pth clobbers deployed
-cd "Chess AI" && export PYTHONIOENCODING=utf-8 PYTHONUTF8=1
-python export_onnx.py --checkpoint chessnet_stockfish.pth --output chessnet.onnx
-cp chessnet.onnx ../portfolio-website/assets/files/chessnet.onnx
-cd ../portfolio-website && git add assets/files/chessnet.onnx && git commit && git push
-```
-
-Also worth grabbing `sf_dataset.npz` once (the expensive 47-min artifact) so relabelling is
-never needed. **Consider Quick Save on the notebook** to make the outputs a durable version —
-then `kaggle kernels output` works and the Output panel is never the bottleneck again.
-
-### If the files are ever gone
-
-Re-run Cells B2 then B3 in `KAGGLE.md` (~47 min labelling + ~1 min training), and **Quick Save
-immediately** so the output is a durable versioned artifact.
-
-### Results of the Stockfish run (2026-07-15, training loss only — NOT a verdict)
-
-15/15 epochs on 200,000 Stockfish-labelled positions, batch 512, lr 2e-4, T4:
-
-| | final |
-|---|---|
-| policy | 3.4795 |
-| value | **0.0920** |
-| file | `chessnet.pth`, 3.73 MB |
-
-- **Value 0.0920 vs ~0.3 for human labels** is the headline — exactly what the Stockfish value
-  target was meant to fix. Encouraging, but it is *training* loss.
-- **Policy 3.4795 is NOT comparable to the human runs' ~2.5.** Different label distribution:
-  predicting Stockfish's best move out of 4096 is a much harder target than predicting what a
-  1700 player did. Comparing the two numbers is meaningless.
-- Both losses were **still falling at epoch 15** — not converged, more epochs would likely help.
+`chessnet.pth` (Stockfish, 3.73 MB), `sf_dataset.npz` (200k labels), `chessnet_human1m.pth`
+(the deployed human model), `validation_set.npz` (the held-out set built for this compare).
+Notebook: https://www.kaggle.com/code/mattgresham/notebook0e22426def/edit — the compare is
+reproducible with `python evaluate.py --compare chessnet.pth chessnet_human1m.pth`.
 
 ### The trap waiting at the comparison step
 

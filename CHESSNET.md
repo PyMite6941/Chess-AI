@@ -95,8 +95,13 @@ exactly the wrong deploy decision.
 **Always decide with `evaluate.py --compare`, never with training loss.**
 
 Note the held-out **value MSE of ~1.09 is poor** — unsurprising, since the value label is the
-game's final result stamped onto every position. That is the single strongest argument for the
-Stockfish labels in `stockfish_label.py`.
+game's final result stamped onto every position. This motivated the Stockfish-label experiment
+in `stockfish_label.py`.
+
+> **Update 2026-07-16 — the Stockfish experiment was tried and LOST.** A 200k-position, 15-epoch
+> Stockfish-labelled model scored *worse on every held-out metric and on tactics* (1/5 vs 3/5)
+> than this deployed human model. It was undertrained (policy loss still falling) and used 5×
+> less data. Not deployed. Full write-up + retry conditions in `NEXT_STEPS.md`.
 
 ## Export + deploy
 
