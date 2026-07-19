@@ -19,11 +19,12 @@ class ResBlock(nn.Module):
 
 
 class ChessNet(nn.Module):
-    def __init__(self, channels=64, res_blocks=5):
+    def __init__(self, channels=64, res_blocks=5, in_planes=19):
         super().__init__()
-        # 13 input planes: 6 white pieces + 6 black pieces + 1 turn plane
+        # in_planes input planes (see board.py N_PLANES): 12 piece + turn +
+        # 4 castling + en-passant + fifty-move.
         self.entry = nn.Sequential(
-            nn.Conv2d(13, channels, 3, padding=1, bias=False),
+            nn.Conv2d(in_planes, channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(channels),
             nn.ReLU(),
         )
