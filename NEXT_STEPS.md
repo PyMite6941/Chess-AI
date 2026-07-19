@@ -4,6 +4,48 @@ Roadmap for finishing / strengthening the Chess AI. See `CHESSNET.md` for how it
 
 ---
 
+## Puzzles + tactic explanations — SHIPPED (2026-07-18)
+
+`tactics.py` — portable, $0, no-vendor (pure python-chess). Create puzzles and explain
+tactics anywhere: library, CLI, or behind an API.
+- `explain_move(board, move)` → one-sentence explanation (mate, hanging capture, fork/royal
+  fork, favourable trade, promotion; flags illegal moves instead of describing them).
+- `find_tactics(board)` → the forced shots for the side to move (mate-in-1, fork, winning
+  capture, safe promotion), best first.
+- `generate_puzzles(count, engine=None)` → engine-free (fast, portable) or engine-verified
+  (`engine="stockfish"`, best-move-beats-second-best). One puzzle per game for variety.
+- CLI: `python tactics.py explain "<FEN>" <uci>` / `solve "<FEN>"` / `make --count N [--engine PATH]`
+- `test_tactics.py` (9 tests, all pass). A browser mirror lives at
+  `ai-lab/app/components/tactics.js`, proven identical wording by `tactics_parity.mjs`
+  (44 cases, 0 mismatches). Not yet wired into the demo UI — the module is ready to import.
+
+## v3 experiment VERDICT (2026-07-18): 19-plane encoding — a WASH, NOT deployed
+
+Added castling / en-passant / fifty-move planes (13→19). Trained with the DEPLOYED recipe
+(min-ELO 1700, 1M, 15 epochs) to isolate the encoding. Held-out (min-ELO 1700, same build as
+the deployed model's original eval):
+
+| metric | v3 (19-plane) | deployed (13-plane) |
+|---|---|---|
+| policy CE | 2.8134 | 2.8201 |
+| value MSE | 1.0802 | 1.0940 |
+| top-1 % | 28.2 | 28.66 |
+| top-5 % | 61.7 | 61.26 |
+| tactics | 3/5 | 3/5 |
+
+**A statistical wash** — every gap is within sampling noise (~0.5pp on 5k positions). The
+encoding is architecturally *correct* now (the net can see castling/ep), but aggregate
+human-move prediction barely moves because few random positions hinge on it. Not deployed
+(deploy-only-if-it-wins; a wash is not a win). The 19-plane pipeline (board.py N_PLANES=19,
+model in_planes=19, verified JS encoder in parity_check.mjs) is PRESERVED as the foundation
+for future work — the live demo's ChessDemo.js stays 13-plane to match the deployed ONNX.
+
+**THREE supervised experiments (Stockfish labels, stronger-players+discount, encoding) have
+now failed to clearly beat the deployed model.** The deployed 1M/1700/15-epoch net is a solid
+local optimum for supervised learning on this data. The only lever left with real upside is
+**MCTS self-play** (`selfplay.py`) — going beyond human imitation entirely. Build the 19-plane
+encoding into that from the start.
+
 ## v2 experiment VERDICT (2026-07-18): mixed, NOT deployed
 
 Ran the recommended recipe headless on Kaggle (via API, no browser): **min-ELO 2000 +

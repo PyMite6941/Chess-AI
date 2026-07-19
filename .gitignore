@@ -8,3 +8,4 @@ __pycache__
 *.onnx
 validation_set.npz
 parity_fens.json
+tactics_cases.json
